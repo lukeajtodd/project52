@@ -1,83 +1,91 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
-
-	"github.com/gorilla/websocket"
+	"sync"
 )
 
-var upgrader = websocket.Upgrader{}
+type Country struct {
+	country_id string
+}
 
-func socketHandler(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-
-	if err != nil {
-		log.Print("Error during connection upgrade: ", err)
-		return
-	}
-
-	defer conn.Close()
-
-	for {
-		messageType, message, err := conn.ReadMessage()
-
-		if err != nil {
-			log.Println("Error during message read: ", err)
-			break
-		}
-
-		log.Printf("Received: %s", message)
-
-		err = conn.WriteMessage(messageType, message)
-
-		if err != nil {
-			log.Println("Error during message write: ", err)
-			break
-		}
-	}
+type Result struct {
+	name    string
+	age     float64
+	gender  string
+	country Country
 }
 
 func main() {
-	// Set routing rules
-	http.HandleFunc("/", home)
 	http.HandleFunc("/predict", predict)
 
-	//Use the default DefaultServeMux.
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func predictAge() {
-	response, err := http.Get("https://api.agify.io?name=michael")
+func endpointHandler(endpoint string, chn chan string, wg *sync.WaitGroup) {
+	wg.Add(1)
+	defer wg.Done()
+
+	fmt.Println(endpoint)
+
+	response, err := http.Get(fmt.Sprint("https://api.", endpoint, ".io?name=michael"))
 	if err != nil {
 		log.Printf("The HTTP request failed with error %s\n", err)
-		return
 	}
 
 	data, _ := ioutil.ReadAll(response.Body)
-	
-	fmt.Println(string(data)))
-}
 
-// func predictGender() {
-
-// }
-
-// func predictNationality() {
-
-// }
-
-func home(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "Index")
+	chn <- string(data)
 }
 
 func predict(w http.ResponseWriter, r *http.Request) {
-	socketHandler(w, r)
-	// go predictAge()
-	// go predictGender()
-	// go predictNationality()
+	chn := make(chan string)
+	var wg sync.WaitGroup
+	var result Result
+
+	endpoints := []string{
+		"nationalize",
+		"genderize",
+		"agify",
+	}
+
+	for _, endpoint := range endpoints {
+		go endpointHandler(endpoint, chn, &wg)
+	}
+
+	wg.Wait()
+
+	//
+	// This below has lots of issues, not sure why/how to pull
+	// the values out of the unmarshalled JSON data.
+	//
+	for v := range chn {
+		// fmt.Println(v)
+		var holding map[string]interface{}
+		json.Unmarshal([]byte(v), &holding)
+
+		if holding["age"] != nil {
+			fmt.Println(holding["age"])
+			result.age = holding["age"].(float64)
+		}
+
+		if holding["gender"] != nil {
+			result.gender = holding["gender"].(string)
+		}
+
+		// if holding["country"] != nil {
+		// 	result.country = holding["country"].(Country)
+		// }
+	}
+
+	fmt.Println(result)
+
+	close(chn)
 }
